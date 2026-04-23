@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma';
 import { logger } from './logger';
 
@@ -21,7 +22,7 @@ export async function audit(params: AuditParams): Promise<void> {
         action: params.action,
         resource: params.resource,
         resourceId: params.resourceId,
-        details: params.details ?? null,
+        details: (params.details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
         ipAddress: params.req?.ip ?? params.req?.headers['x-forwarded-for']?.toString(),
         userAgent: params.req?.headers['user-agent'],
       },
