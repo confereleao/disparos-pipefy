@@ -1,0 +1,296 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────
+// Usuários e Permissões
+// ─────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(OPERATOR)
+  active    Boolean  @default(true)
+  lastLoginAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messageLogs MessageLog[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────
+// Integrações
+// ─────────────────────────────────────────────────────────
+
+model PipeIntegration {
+  id           String   @id @default(uuid())
+  name         String
+  pipefyToken  String
+  pipeId       String
+  pipeName     String?
+  fieldMapping Json     @default("{}")
+  // Ex: { "phone": "field_abc123", "name": "field_def456", "company": "field_ghi789" }
+  active       Boolean  @default(true)
+  lastSyncAt   DateTime?
+  webhookToken String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  automations Automation[]
+  cardsCache  CardCache[]
+  messageLogs MessageLog[]
+  messageQueue MessageQueue[]
+
+  @@map("pipe_integrations")
+}
+
+model WhatsAppIntegration {
+  id           String   @id @default(uuid())
+  name         String
+  provider     String   @default("evolution") // evolution, twilio, z-api, etc.
+  apiUrl       String
+  apiKey       String
+  instanceName String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  automations  Automation[]
+  messageQueue MessageQueue[]
+  messageLogs  MessageLog[]
+
+  @@map("whatsapp_integrations")
+}
+
+// ─────────────────────────────────────────────────────────
+// Automações
+// ─────────────────────────────────────────────────────────
+
+enum TriggerType {
+  CARD_CREATED
+  CARD_MOVED_TO_PHASE
+  CARD_LEFT_PHASE
+  FIELD_CHANGED
+  CARD_STALE
+}
+
+model Automation {
+  id                    String      @id @default(uuid())
+  name                  String
+  description           String?
+  pipeIntegrationId     String
+  phaseId               String?
+  phaseName             String?
+  triggerType           TriggerType
+  triggerConfig         Json        @default("{}")
+  // CARD_MOVED_TO_PHASE: { phaseId, phaseName }
+  // CARD_LEFT_PHASE:     { phaseId, phaseName }
+  // FIELD_CHANGED:       { fieldId, fieldName, newValue? }
+  // CARD_STALE:          { phaseId, daysStale }
+  filters               Json?
+  // [{ fieldId, operator: "equals"|"contains"|"not_empty", value }]
+  templateId            String
+  whatsappIntegrationId String?
+  delayMinutes          Int         @default(0)
+  allowDuplicate        Boolean     @default(false)
+  active                Boolean     @default(true)
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  pipeIntegration     PipeIntegration      @relation(fields: [pipeIntegrationId], references: [id], onDelete: Cascade)
+  template            MessageTemplate      @relation(fields: [templateId], references: [id])
+  whatsappIntegration WhatsAppIntegration? @relation(fields: [whatsappIntegrationId], references: [id])
+  messageLogs         MessageLog[]
+  messageQueue        MessageQueue[]
+
+  @@map("automations")
+}
+
+// ─────────────────────────────────────────────────────────
+// Templates de Mensagem
+// ─────────────────────────────────────────────────────────
+
+enum TemplateCategory {
+  COMMERCIAL
+  BILLING
+  SUPPORT
+  FOLLOW_UP
+  REMINDER
+}
+
+model MessageTemplate {
+  id        String           @id @default(uuid())
+  name      String
+  category  TemplateCategory @default(COMMERCIAL)
+  content   String
+  variables String[]         @default([])
+  active    Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  automations  Automation[]
+  messageLogs  MessageLog[]
+  messageQueue MessageQueue[]
+
+  @@map("message_templates")
+}
+
+// ─────────────────────────────────────────────────────────
+// Fila de Envio
+// ─────────────────────────────────────────────────────────
+
+enum QueueStatus {
+  PENDING
+  PROCESSING
+  SENT
+  ERROR
+  CANCELLED
+}
+
+model MessageQueue {
+  id                    String      @id @default(uuid())
+  pipeIntegrationId     String
+  automationId          String?
+  templateId            String?
+  whatsappIntegrationId String?
+  userId                String?
+  cardId                String
+  cardTitle             String?
+  phoneNumber           String
+  messageContent        String
+  status                QueueStatus @default(PENDING)
+  scheduledAt           DateTime    @default(now())
+  processedAt           DateTime?
+  attempts              Int         @default(0)
+  maxAttempts           Int         @default(3)
+  errorMessage          String?
+  idempotencyKey        String?     @unique
+  // hash de automationId+cardId+triggerType para evitar duplicados
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  pipeIntegration     PipeIntegration      @relation(fields: [pipeIntegrationId], references: [id])
+  automation          Automation?          @relation(fields: [automationId], references: [id])
+  template            MessageTemplate?     @relation(fields: [templateId], references: [id])
+  whatsappIntegration WhatsAppIntegration? @relation(fields: [whatsappIntegrationId], references: [id])
+
+  @@index([status, scheduledAt])
+  @@index([cardId])
+  @@map("message_queue")
+}
+
+// ─────────────────────────────────────────────────────────
+// Logs de Mensagem (Histórico)
+// ─────────────────────────────────────────────────────────
+
+model MessageLog {
+  id                    String      @id @default(uuid())
+  messageQueueId        String?
+  automationId          String?
+  templateId            String?
+  userId                String?
+  pipeIntegrationId     String?
+  whatsappIntegrationId String?
+  cardId                String
+  cardTitle             String?
+  pipeName              String?
+  phaseName             String?
+  phoneNumber           String
+  messageContent        String
+  status                QueueStatus
+  apiResponse           Json?
+  errorMessage          String?
+  sentAt                DateTime?
+  createdAt             DateTime    @default(now())
+
+  automation          Automation?          @relation(fields: [automationId], references: [id])
+  template            MessageTemplate?     @relation(fields: [templateId], references: [id])
+  user                User?                @relation(fields: [userId], references: [id])
+  pipeIntegration     PipeIntegration?     @relation(fields: [pipeIntegrationId], references: [id])
+  whatsappIntegration WhatsAppIntegration? @relation(fields: [whatsappIntegrationId], references: [id])
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([cardId])
+  @@map("message_logs")
+}
+
+// ─────────────────────────────────────────────────────────
+// Cache de Cards do Pipefy
+// ─────────────────────────────────────────────────────────
+
+model CardCache {
+  id                String   @id @default(uuid())
+  pipeIntegrationId String
+  cardId            String
+  cardTitle         String?
+  pipeId            String
+  phaseId           String?
+  phaseName         String?
+  fields            Json     @default("{}")
+  responsibleEmail  String?
+  responsibleName   String?
+  lastSyncAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  pipeIntegration PipeIntegration @relation(fields: [pipeIntegrationId], references: [id], onDelete: Cascade)
+
+  @@unique([pipeIntegrationId, cardId])
+  @@index([phaseId])
+  @@map("cards_cache")
+}
+
+// ─────────────────────────────────────────────────────────
+// Auditoria
+// ─────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  userEmail  String?
+  action     String
+  resource   String
+  resourceId String?
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────
+// Configurações do Sistema
+// ─────────────────────────────────────────────────────────
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  label     String?
+  group     String?  @default("general")
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(railway --version)",
+      "Bash(vercel --version)",
+      "Bash(gh --version)",
+      "Bash(git --version)",
+      "Bash(npm install *)"
+    ]
+  }
+}
